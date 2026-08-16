@@ -1,0 +1,19 @@
+{
+  "module_name": "FSR Layer",
+  "maintainer": "ddyo",
+  "license": "GPL-2.0-or-later",
+  "url": "https://github.com/dan-dr/qmk_modules/tree/main/fsr_layer",
+  "features": {
+    "console": true
+  },
+  "keycodes": [
+    {
+      "key": "FSR_CAL",
+      "aliases": ["FSRCAL"]
+    },
+    {
+      "key": "FSR_TOG",
+      "aliases": ["FSRTOG"]
+    }
+  ]
+}
