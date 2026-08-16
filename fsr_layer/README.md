@@ -1,24 +1,75 @@
-# FSR layer detectors
+# FSR layer
 
-Capture / console field docs live in [`LOGGING.md`](LOGGING.md).
+A QMK Community Module that turns an analog force-sensitive resistor into a
+stable touch signal for QMK Auto Mouse. It includes four selectable detectors,
+trackball-motion-aware modes, console diagnostics, a Raw HID configuration
+protocol, and EEPROM-backed runtime settings.
 
-## Selectable FSR Sentinels
+![FSR Sentinel web configurator showing Atlas Phase v1 parameters](assets/web-configurator.png)
 
-The runtime registry keeps four implementations side by side:
+Capture and console field documentation lives in [`LOGGING.md`](LOGGING.md).
 
-- ID 1, `v1_dual_cusum`: frozen FSR Sentinel v1
-- ID 2, `v2_signal_envelope`: signal-only adaptive envelope
-- ID 3, `v3_motion_envelope`: motion-assisted adaptive envelope
-- ID 4, `atlas_phase_v1`: experimental bidirectional phase latch
+## How it works
 
-Without saved EEPROM state, reboot selects `atlas_phase_v1`. After a WebHID
-edit, the active algorithm and every algorithm’s parameter block are written to
-the FSR half’s EEPROM (~0.5s debounce) and restored on the next boot, so the
-last selected algorithm comes back. The WebHID tool discovers schemas from
-firmware. Selecting an algorithm or changing any value increments a generation
-counter; the sensor task observes it, resets the detector, and forces release
-before the next sample. A schema mismatch or bad CRC discards the blob and
-falls back to compile-time defaults.
+1. The sensor half samples the configured analog pin. Dan's Charybdis uses
+   GP26 for three force sensors wired in parallel under the trackball.
+2. The selected detector converts the ADC stream into one boolean touch state.
+   Motion-aware algorithms also consume accumulated trackball deltas without
+   changing the pointer report.
+3. `is_fsr_touched()` exposes that state. With `FSR_MOUSE_LAYER` and QMK Auto
+   Mouse enabled, QMK activates the configured mouse layer while touch remains
+   active and applies its normal timeout after release.
+4. `FSR_CAL` resets detector state and forces release. `FSR_TOG` disables or
+   re-enables sampling and reinitializes the runtime.
+
+The module does not call `layer_on()` or `layer_off()` directly. Link it from
+`keymap.json`, define `FSR_ENABLE`, and let QMK Auto Mouse own layer timing.
+
+## Algorithms
+
+All four implementations remain compiled into one runtime registry. The active
+algorithm can be changed without rebuilding firmware.
+
+| ID | Algorithm | Behavior |
+|---:|---|---|
+| 1 | `v1_dual_cusum` | Frozen Run7 Sentinel. Median-of-three input, a rate-limited idle center, cumulative touch and release evidence, and a post-release recovery blank. Ignores trackball motion. |
+| 2 | `v2_signal_envelope` | Signal-only adaptive envelope. Tracks an idle floor, freezes a touch anchor, and releases near the anchor or after a drop from a decaying peak. Ignores trackball motion. |
+| 3 | `v3_motion_envelope` | V2 envelope plus bounded motion-assisted onset and release confirmation. Uses a private motion accumulator and does not modify pointer movement. |
+| 4 | `atlas_phase_v1` | Experimental bidirectional phase latch with selectable filtering, cadence, motion modes, dwell, baseline tracking, and rebound quarantine. Exposes 17 editable parameters. |
+
+Without valid saved state, `atlas_phase_v1` is the current boot default. V1 is
+the frozen rollback/reference implementation.
+
+## Web configurator and EEPROM
+
+The WebHID configurator lives in the qmk_userspace repository:
+
+- [`tools/fsr-sentinel-web`](https://github.com/dan-dr/qmk_userspace/tree/main/tools/fsr-sentinel-web)
+
+Serve that userspace locally, open the tool in Chrome or Edge, and connect the
+USB cable to the FSR/trackball half. Firmware reports the current schema,
+installed algorithms, active algorithm, parameter metadata, and values. The UI
+therefore follows the firmware instead of carrying a separate hardcoded list.
+
+Selecting an algorithm or editing a value applies immediately. The firmware
+increments a generation counter, resets the detector, and forces release before
+the next sample so old state is never interpreted with new parameters.
+
+Every change marks the FSR configuration dirty. About 0.5 seconds after the last
+edit, firmware writes one CRC-protected blob to that half's EEPROM containing:
+
+- the runtime schema version
+- the active algorithm
+- every algorithm's parameter block, not only the visible one
+
+On boot, the sensor half restores that blob, including the last selected
+algorithm. A schema mismatch, invalid algorithm ID, or bad CRC rejects the blob
+and restores compile-time defaults. EEPROM is local to the physical half, so
+connect and configure the half that owns the FSR. A successful connection or
+EEPROM save proves transport and persistence only; it does not prove the chosen
+detector is safe from false activation or a stuck mouse layer.
+
+## Runtime details
 
 V2 and v3 use a causal median-of-three front end. V2 tracks an idle Q8 floor,
 confirms an upward excursion, freezes the touch anchor, and releases on a
